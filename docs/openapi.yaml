@@ -1,0 +1,294 @@
+openapi: 3.0.3
+info:
+  title: BridgePlayer Pipeline API
+  version: "0.1.0"
+  description: >
+    Accessibility asset pipeline for lesson videos (Track 2, Digital Bridge
+    Accessibility Hackathon 2026). Turns an uploaded lesson video into
+    captions (en/am), a synced transcript, an audio-description track,
+    an offline pack, a job card, and a verifiable certificate.
+servers:
+  - url: http://localhost:8000
+    description: Local dev (Docker Compose)
+
+paths:
+  /videos:
+    post:
+      summary: Upload a lesson video and start the accessibility pipeline
+      operationId: uploadVideo
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                title:
+                  type: string
+                language_hint:
+                  type: string
+                  enum: [am, en]
+                  default: am
+      responses:
+        "202":
+          description: Accepted, processing started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Video"
+
+  /videos/{videoId}:
+    get:
+      summary: Get video + pipeline status
+      operationId: getVideo
+      parameters:
+        - $ref: "#/components/parameters/VideoId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Video"
+
+  /videos/{videoId}/captions:
+    get:
+      summary: Get draft or verified captions (WebVTT) for a language
+      operationId: getCaptions
+      parameters:
+        - $ref: "#/components/parameters/VideoId"
+        - name: lang
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [am, en]
+      responses:
+        "200":
+          description: WebVTT file
+          content:
+            text/vtt:
+              schema:
+                type: string
+    put:
+      summary: Trainer submits edited/verified captions
+      operationId: putCaptions
+      parameters:
+        - $ref: "#/components/parameters/VideoId"
+        - name: lang
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [am, en]
+      requestBody:
+        required: true
+        content:
+          text/vtt:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Saved and marked verified
+
+  /videos/{videoId}/description-track:
+    get:
+      summary: Audio-description cues (WebVTT descriptions track)
+      operationId: getDescriptionTrack
+      parameters:
+        - $ref: "#/components/parameters/VideoId"
+      responses:
+        "200":
+          description: WebVTT file
+          content:
+            text/vtt:
+              schema:
+                type: string
+    put:
+      summary: Trainer writes/edits audio-description cues
+      operationId: putDescriptionTrack
+      parameters:
+        - $ref: "#/components/parameters/VideoId"
+      requestBody:
+        required: true
+        content:
+          text/vtt:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Saved
+
+  /videos/{videoId}/sign-language:
+    post:
+      summary: Attach a synced Ethiopian Sign Language video track
+      operationId: attachSignLanguage
+      parameters:
+        - $ref: "#/components/parameters/VideoId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                offset_ms:
+                  type: integer
+                  description: Sync offset vs. main video, in milliseconds
+      responses:
+        "200":
+          description: Attached
+
+  /videos/{videoId}/offline-pack:
+    get:
+      summary: Download the 3G/offline pack (opus audio + html transcript + manifest)
+      operationId: getOfflinePack
+      parameters:
+        - $ref: "#/components/parameters/VideoId"
+      responses:
+        "200":
+          description: ZIP archive
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+
+  /videos/{videoId}/jobcard:
+    get:
+      summary: Accessible job card (schema.org/JobPosting JSON-LD) with audio summary
+      operationId: getJobCard
+      parameters:
+        - $ref: "#/components/parameters/VideoId"
+      responses:
+        "200":
+          description: JSON-LD + audio summary URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobCard"
+
+  /learners/{learnerId}/certificate:
+    get:
+      summary: Open Badges 3.0 certificate with a public verify link
+      operationId: getCertificate
+      parameters:
+        - name: learnerId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Open Badges 3.0 credential
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenBadge"
+
+  /certificates/{credentialId}/verify:
+    get:
+      summary: Public, no-auth verification of a certificate
+      operationId: verifyCertificate
+      parameters:
+        - name: credentialId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  issuedOn:
+                    type: string
+                    format: date
+                  issuedOnEthiopian:
+                    type: string
+                    description: Same date rendered in the Ethiopian calendar
+
+components:
+  parameters:
+    VideoId:
+      name: videoId
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    Video:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum: [uploaded, transcribing, draft_ready, verified, published]
+        durationSeconds:
+          type: number
+        captionsReady:
+          type: object
+          properties:
+            am:
+              type: boolean
+            en:
+              type: boolean
+        hasSignLanguage:
+          type: boolean
+        hasAudioDescription:
+          type: boolean
+        hasOfflinePack:
+          type: boolean
+
+    JobCard:
+      type: object
+      properties:
+        jsonLd:
+          type: object
+          description: schema.org/JobPosting JSON-LD, zoomable to 200% in the card UI
+        audioSummaryUrl:
+          type: string
+        datePosted:
+          type: string
+        validThrough:
+          type: string
+        datePostedEthiopian:
+          type: string
+        validThroughEthiopian:
+          type: string
+
+    OpenBadge:
+      type: object
+      description: Open Badges 3.0 Verifiable Credential (subset)
+      properties:
+        "@context":
+          type: array
+          items:
+            type: string
+        id:
+          type: string
+        type:
+          type: array
+          items:
+            type: string
+        issuer:
+          type: object
+        credentialSubject:
+          type: object
+        verifyUrl:
+          type: string

@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  pipeline:
+    build: ./pipeline
+    ports:
+      - "8000:8000"
+    volumes:
+      - media:/data/media
+    environment:
+      - WHISPER_MODEL=small          # faster-whisper model size; bump if GPU/time allows
+      - DATA_DIR=/data/media
+    # No external calls: ffmpeg + faster-whisper run locally, satisfies
+    # "no data leaves the host" and "no paid-API lock-in" scoring criteria.
+
+  test-page:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./test-target:/usr/share/nginx/html:ro
+    # Serves a plain HTML page (NOT part of bridge-player) to prove the
+    # script-tag embed works on a page that isn't yours. Drop a copy of
+    # a Savanna-static-pages page in ./test-target to test against the
+    # real platform markup.
+
+volumes:
+  media:

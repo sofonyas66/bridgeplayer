@@ -6,10 +6,13 @@ security and privacy" and "kept running" both assume no paid-API
 lock-in and nothing leaving the host).
 """
 
+import os
 import subprocess
 from pathlib import Path
 
 from faster_whisper import WhisperModel
+
+FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
 
 # Loaded once per process. "small" is a reasonable speed/quality
 # trade-off for a hackathon laptop/CPU; bump to "medium" if you have
@@ -30,7 +33,7 @@ def extract_audio(video_path: Path, out_wav: Path) -> None:
     """ffmpeg: pull mono 16kHz WAV out of the uploaded video."""
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG_BIN, "-y",
         "-i", str(video_path),
         "-vn",
         "-ac", "1",
@@ -68,20 +71,47 @@ def segments_to_vtt(segments) -> str:
     return "\n".join(lines)
 
 
-def transcribe_to_vtt(wav_path: Path, language: str, model_size: str = "small") -> str:
+def transcribe_to_vtt(wav_path: Path, language: str = "en", model_size: str = "small") -> str:
     """
-    language: "am" (Amharic) or "en" (English) — faster-whisper / whisper
-    language codes. Amharic ASR quality is a known risk: this produces a
-    DRAFT only. The trainer must review it in the editor before it's
-    marked verified — never ship a draft caption as final.
+    Translates or transcribes audio to WebVTT.
+    For English output from Amharic source video, calls model.transcribe(..., language="am", task="translate").
+    """
+    model = get_model(model_size)
+    if language == "en":
+        segments, info = model.transcribe(
+            str(wav_path),
+            language="am",
+            task="translate",
+            vad_filter=True,
+        )
+    else:
+        segments, info = model.transcribe(
+            str(wav_path),
+            language=language,
+            vad_filter=True,
+        )
+    return segments_to_vtt(list(segments))
+
+
+def segments_only_vtt(wav_path: Path, model_size: str = "small") -> str:
+    """
+    Runs faster-whisper VAD (vad_filter=True) to detect speech segment start/end
+    timestamps and outputs a WebVTT file with empty cue text for human trainers to fill in.
     """
     model = get_model(model_size)
     segments, info = model.transcribe(
         str(wav_path),
-        language=language,
-        vad_filter=True,  # skip silence, helps with noisy classroom audio
+        language="am",
+        task="translate",
+        vad_filter=True,
     )
-    return segments_to_vtt(list(segments))
+    lines = ["WEBVTT", ""]
+    for seg in segments:
+        start = _format_timestamp(seg.start)
+        end = _format_timestamp(seg.end)
+        lines.append(f"{start} --> {end}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def run_pipeline(video_path: Path, work_dir: Path, languages=("en", "am"),
@@ -103,7 +133,10 @@ def run_pipeline(video_path: Path, work_dir: Path, languages=("en", "am"),
     errors = {}
     for lang in languages:
         try:
-            vtt = transcribe_to_vtt(wav_path, language=lang, model_size=model_size)
+            if lang == "am":
+                vtt = segments_only_vtt(wav_path, model_size=model_size)
+            else:
+                vtt = transcribe_to_vtt(wav_path, language=lang, model_size=model_size)
             out_path = work_dir / f"captions.{lang}.vtt"
             out_path.write_text(vtt, encoding="utf-8")
             results[lang] = str(out_path)

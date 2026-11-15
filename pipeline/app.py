@@ -15,11 +15,13 @@ waiting on this service.
 
 import os
 import uuid
+import datetime
 import logging
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from transcribe import run_pipeline
 
@@ -31,6 +33,14 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")
 
 app = FastAPI(title="BridgePlayer Pipeline API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # In-memory store for the hackathon — swap for sqlite/postgres if there's time.
 VIDEOS = {}
@@ -94,6 +104,25 @@ async def upload_video(background_tasks: BackgroundTasks,
 async def get_video(video_id: str):
     video = VIDEOS.get(video_id)
     if not video:
+        video_dir = DATA_DIR / video_id
+        if video_dir.exists():
+            mp4s = list(video_dir.glob("*.mp4"))
+            if mp4s:
+                return {
+                    "id": video_id,
+                    "title": mp4s[0].stem,
+                    "status": "draft_ready",
+                    "durationSeconds": None,
+                    "captionsReady": {
+                        "am": (video_dir / "captions.am.vtt").exists(),
+                        "en": (video_dir / "captions.en.vtt").exists(),
+                    },
+                    "hasSignLanguage": False,
+                    "hasAudioDescription": False,
+                    "hasOfflinePack": False,
+                    "source_path": str(mp4s[0]),
+                    "media_filename": mp4s[0].name,
+                }
         raise HTTPException(404, "video not found")
     return video
 
@@ -125,11 +154,83 @@ async def get_media(video_id: str):
     worth building."""
     video = VIDEOS.get(video_id)
     if not video:
+        video_dir = DATA_DIR / video_id
+        if video_dir.exists():
+            mp4s = list(video_dir.glob("*.mp4"))
+            if mp4s:
+                return FileResponse(mp4s[0], media_type="video/mp4")
         raise HTTPException(404, "video not found")
     path = Path(video["source_path"])
     if not path.exists():
         raise HTTPException(404, "media file missing")
-    return FileResponse(path)
+    return FileResponse(path, media_type="video/mp4")
+
+
+# In-memory store for issued certificates
+CREDENTIALS = {}
+
+
+@app.get("/videos/{video_id}/jobcard")
+async def get_job_card(video_id: str):
+    return {
+        "jobPosting": {
+            "@context": "https://schema.org",
+            "@type": "JobPosting",
+            "title": "Junior Video Accessibility Specialist",
+            "description": "Review and verify draft captions, synchronized transcripts, and accessible media for educational lessons.",
+            "datePosted": "2026-11-15",
+            "validThrough": "2026-12-15",
+            "employmentType": "FULL_TIME",
+            "hiringOrganization": {
+                "@type": "Organization",
+                "name": "Digital Bridge Learning Initiative",
+                "sameAs": "https://alxafrica.com"
+            }
+        },
+        "audioSummaryText": "Job opportunity for a Junior Video Accessibility Specialist at Digital Bridge. Review captions and accessible media for online learners. Applications open through December."
+    }
+
+
+@app.get("/learners/{learner_id}/certificate")
+async def get_certificate(learner_id: str):
+    cred_id = str(uuid.uuid4())
+    issued_on = datetime.date.today().isoformat()
+    verify_url = f"http://localhost:8000/certificates/{cred_id}/verify"
+
+    cert = {
+        "@context": [
+            "https://www.w3.org/2018/credentials/v1",
+            "https://purl.imsglobal.org/spec/ob/v3p0/context.json"
+        ],
+        "id": f"urn:uuid:{cred_id}",
+        "type": ["VerifiableCredential", "OpenBadgeCredential"],
+        "issuer": {
+            "id": "https://alxafrica.com",
+            "name": "ALX Ethiopia / Digital Bridge"
+        },
+        "credentialSubject": {
+            "id": f"urn:learner:{learner_id}",
+            "achievement": {
+                "name": "BridgePlayer Accessible Lesson - Completed"
+            }
+        },
+        "verifyUrl": verify_url
+    }
+
+    CREDENTIALS[cred_id] = {
+        "valid": True,
+        "issuedOn": issued_on
+    }
+
+    return cert
+
+
+@app.get("/certificates/{credential_id}/verify")
+async def verify_certificate(credential_id: str):
+    cred = CREDENTIALS.get(credential_id)
+    if not cred:
+        return {"valid": False, "issuedOn": None}
+    return cred
 
 
 # TODO: /videos/{id}/description-track, /videos/{id}/sign-language,

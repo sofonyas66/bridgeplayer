@@ -293,8 +293,7 @@
     // --- Visible, resizable caption overlay ---
     const captionOverlay = document.createElement("div");
     captionOverlay.className = "bp-caption-overlay";
-    captionOverlay.setAttribute("aria-live", "polite");
-    captionOverlay.setAttribute("aria-atomic", "true");
+    captionOverlay.setAttribute("aria-live", "off");
 
     const captionTextSpan = document.createElement("span");
     captionTextSpan.className = "bp-caption-text";
